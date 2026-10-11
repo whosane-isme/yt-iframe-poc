@@ -1,0 +1,72 @@
+export type Interval = [number, number];
+export interface PlaybackEvent {
+  id: string;
+  timestamp: string;
+  type: string;
+  positionSeconds: number;
+  playbackRate: number;
+  details: string;
+}
+export interface Observation {
+  position: number;
+  duration: number;
+  rate: number;
+  state: number;
+  mono: number;
+  visible: boolean;
+}
+export interface WatchSession {
+  sessionId: string;
+  studentId: string;
+  videoId: string;
+  startedAt: string;
+  lastUpdatedAt: string;
+  duration: number;
+  lastPositionSeconds: number;
+  totalPlaybackWallSeconds: number;
+  watchedIntervals: Interval[];
+  seekCount: number;
+  seekEvents: PlaybackEvent[];
+  playbackRateHistory: PlaybackEvent[];
+  rateWallSeconds: Record<string, number>;
+  events: PlaybackEvent[];
+  reachedEnd: boolean;
+}
+export interface Tracker {
+  session: WatchSession;
+  previous: Observation | null;
+}
+export interface Player {
+  getCurrentTime(): number;
+  getDuration(): number;
+  getPlaybackRate(): number;
+  getPlayerState(): number;
+  getVideoUrl(): string;
+  getAvailablePlaybackRates(): number[];
+  seekTo(seconds: number, allowSeekAhead: boolean): void;
+  playVideo(): void;
+  pauseVideo(): void;
+  destroy(): void;
+}
+export interface PlayerEvent {
+  target: Player;
+  data: number;
+}
+export interface YouTubeAPI {
+  Player: new (
+    element: HTMLElement,
+    options: {
+      videoId: string;
+      width: string;
+      height: string;
+      playerVars: Record<string, string | number>;
+      events: Record<string, (event: PlayerEvent) => void>;
+    },
+  ) => Player;
+}
+declare global {
+  interface Window {
+    YT?: YouTubeAPI;
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
