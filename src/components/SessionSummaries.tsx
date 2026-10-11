@@ -11,9 +11,11 @@ export function SessionSummaries({
   history,
   active,
   onEnd,
+  suspended = false,
 }: {
   history: FinalSessionSummary[];
   active: boolean;
+  suspended?: boolean;
   onEnd: () => void;
 }) {
   const latest = history[0];
@@ -23,14 +25,16 @@ export function SessionSummaries({
         <h2>
           <History size={17} /> Viewing sessions
         </h2>
-        <button onClick={onEnd} disabled={!active}>
+        <button onClick={onEnd} disabled={!active || suspended}>
           <Square size={13} /> End Session
         </button>
       </div>
       <p className="muted">
-        {active
-          ? "Session open · pause saves a checkpoint and keeps this session open."
-          : "No open session · playback starts a new session."}
+        {suspended
+          ? "Segment experiment · lecture session tracking and finalization are suspended."
+          : active
+            ? "Session open · pause saves a checkpoint and keeps this session open."
+            : "No open session · playback starts a new session."}
       </p>
       {latest ? (
         <>

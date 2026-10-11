@@ -14,6 +14,18 @@ import {
   CHECKPOINT_INTERVAL_MS,
   finalizeSession,
 } from "../lib/watchSummary";
+import {
+  DEFAULT_INITIALIZATION,
+  isSegmentExperiment,
+  playerVars,
+  type PlayerInitialization,
+} from "../lib/playerConfig";
+import {
+  EMPTY_LIVE_STATE,
+  readLiveState,
+  runPlayerCommand,
+  type PlayerCommand,
+} from "../lib/playerControls";
 const errors: Record<number, string> = {
   2: "Invalid video ID or player parameter.",
   5: "HTML5 playback failed. Try another browser.",
@@ -29,7 +41,12 @@ function saved(student: string, video: string) {
     return createSession(student, video);
   }
 }
-export function useWatchPlayer(student: string, video: string, threshold = 90) {
+export function useWatchPlayer(
+  student: string,
+  video: string,
+  threshold = 90,
+  initialization: PlayerInitialization = DEFAULT_INITIALIZATION,
+) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<Player | null>(null);
   const [session, setSession] = useState<WatchSession>(() =>
@@ -49,16 +66,31 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
   const thresholdRef = useRef(threshold);
   thresholdRef.current = threshold;
   const endSessionRef = useRef<() => void>(() => {});
+  const reloadPosition = useRef<number | null>(
+    isSegmentExperiment(initialization.settings)
+      ? session.lastPositionSeconds
+      : null,
+  );
+  const sampleRef = useRef<() => void>(() => {});
+  const [live, setLive] = useState(EMPTY_LIVE_STATE);
+  const [commandError, setCommandError] = useState("");
+  const [appliedVars, setAppliedVars] = useState<
+    Record<string, string | number>
+  >({});
+  const trackingSuspended = isSegmentExperiment(initialization.settings);
+  const stopRequested = useRef(false);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let readyTimer: ReturnType<typeof setTimeout> | undefined;
     let ready = false;
+    let pendingInitialPlayback = true;
     let dirty = false;
     let lastSave = performance.now();
     let local: Player | null = null;
     setError("");
     setStatus("Loading API");
+    setLive(EMPTY_LIVE_STATE);
     const publish = () => {
       if (active) setSession(tracker.current.session);
       dirty = true;
@@ -81,6 +113,26 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
     flushRef.current = flush;
     const sample = () => {
       if (!local || !ready) return;
+      setLive(readLiveState(local));
+      setRate(local.getPlaybackRate());
+      // Segment previews never enter lecture observations or completion calculations.
+      if (trackingSuspended) {
+        tracker.current.previous = null;
+        return;
+      }
+      if (pendingInitialPlayback) {
+        tracker.current.previous = null;
+        const duration = local.getDuration();
+        if (
+          Number.isFinite(duration) &&
+          duration > 0 &&
+          duration !== tracker.current.session.duration
+        ) {
+          tracker.current.session = { ...tracker.current.session, duration };
+          publish();
+        }
+        return;
+      }
       const beforeSeek = tracker.current.session.seekCount;
       if (!logicalSession.current) tracker.current.previous = null;
       tracker.current = observe(tracker.current, {
@@ -96,6 +148,7 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
       publish();
       if (tracker.current.session.seekCount > beforeSeek) flush();
     };
+    sampleRef.current = sample;
     const finish = (reason: "manual_end" | "video_ended") => {
       if (!logicalSession.current) return;
       tracker.current.session = finalizeSession(
@@ -112,7 +165,7 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
       flush();
     };
     endSessionRef.current = () => {
-      if (!logicalSession.current) return;
+      if (!logicalSession.current || trackingSuspended) return;
       sample();
       finish("manual_end");
       local?.pauseVideo();
@@ -137,12 +190,13 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
     const visibility = () => {
       if (!active) return;
       tracker.current.previous = null;
-      event(
-        "visibility",
-        document.visibilityState === "visible"
-          ? "Tab visible; new observation baseline."
-          : "Tab hidden; coverage suspended.",
-      );
+      if (!trackingSuspended)
+        event(
+          "visibility",
+          document.visibilityState === "visible"
+            ? "Tab visible; new observation baseline."
+            : "Tab hidden; coverage suspended.",
+        );
       flush();
     };
     const leaving = () => flush();
@@ -155,16 +209,20 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
         const mount = document.createElement("div");
         host.current.replaceChildren(mount);
         setStatus("Loading player");
+        const vars = playerVars(
+          initialization.settings,
+          video,
+          window.location.origin,
+          initialization.autoplayAuthorized,
+          reloadPosition.current,
+          tracker.current.session.duration,
+        );
+        setAppliedVars(vars);
         local = new api.Player(mount, {
           videoId: video,
           width: "100%",
           height: "100%",
-          playerVars: {
-            origin: window.location.origin,
-            playsinline: 1,
-            autoplay: 0,
-            controls: 1,
-          },
+          playerVars: vars,
           events: {
             onReady: (e) => {
               if (!active) return;
@@ -175,14 +233,27 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
               setStatus("Ready");
               setRates(local.getAvailablePlaybackRates());
               sample();
-              event(
-                "ready",
-                "Official IFrame API ready. " + local.getVideoUrl(),
-              );
+              if (!trackingSuspended)
+                event(
+                  "ready",
+                  "Official IFrame API ready. " + local.getVideoUrl(),
+                );
               poll();
             },
             onStateChange: (e) => {
               if (!active || !ready) return;
+              if (trackingSuspended) {
+                setStatus(stateLabels[e.data] ?? "Unknown");
+                sample();
+                return;
+              }
+              if (e.data === 1) {
+                stopRequested.current = false;
+                if (pendingInitialPlayback) {
+                  tracker.current.previous = null;
+                  pendingInitialPlayback = false;
+                }
+              }
               if (e.data === 1 && !logicalSession.current) {
                 logicalSession.current = beginSession(
                   tracker.current.session,
@@ -194,16 +265,18 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
               }
               sample();
               setStatus(stateLabels[e.data] ?? "Unknown");
-              if (e.data === 0)
+              if (e.data === 0 && !stopRequested.current)
                 tracker.current.session = {
                   ...tracker.current.session,
                   reachedEnd: true,
                 };
               event(
-                stateLabels[e.data]?.toLowerCase() ?? "state",
+                e.data === 0 && stopRequested.current
+                  ? "stopped"
+                  : (stateLabels[e.data]?.toLowerCase() ?? "state"),
                 `YouTube state ${e.data}`,
               );
-              if (e.data === 0) finish("video_ended");
+              if (e.data === 0 && !stopRequested.current) finish("video_ended");
               if (e.data !== 1) flush();
             },
             onPlaybackRateChange: (e) => {
@@ -211,7 +284,8 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
               sample();
               tracker.current.previous = null;
               setRate(e.data);
-              event("rate", `Playback rate changed to ${e.data}×`);
+              if (!trackingSuspended)
+                event("rate", `Playback rate changed to ${e.data}×`);
               flush();
             },
             onError: (e) => {
@@ -221,13 +295,18 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
               tracker.current.previous = null;
               setStatus("Error");
               setError(errors[e.data] ?? `YouTube error ${e.data}`);
-              event("error", errors[e.data] ?? `Code ${e.data}`);
+              if (!trackingSuspended)
+                event("error", errors[e.data] ?? `Code ${e.data}`);
               flush();
             },
             onAutoplayBlocked: () => {
               if (!active) return;
               setStatus("Playback blocked");
-              event("autoplay-blocked", "Press play in the YouTube player.");
+              if (!trackingSuspended)
+                event("autoplay-blocked", "Press play in the YouTube player.");
+            },
+            onApiChange: () => {
+              if (active && ready && local) setLive(readLiveState(local));
             },
           },
         });
@@ -248,6 +327,11 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
         }
       });
     return () => {
+      if (ready && local) {
+        sample();
+        if (!trackingSuspended && !pendingInitialPlayback)
+          reloadPosition.current = local.getCurrentTime();
+      }
       flush();
       active = false;
       clearTimeout(timer);
@@ -259,7 +343,7 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
       local?.destroy();
       tracker.current.previous = null;
     };
-  }, [student, video, retry]);
+  }, [student, video, retry, initialization]);
   useEffect(() => {
     tracker.current.session = checkpoint(tracker.current.session, threshold);
     setSession(tracker.current.session);
@@ -304,6 +388,23 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
     p.seekTo(resumePosition.current, true);
     p.playVideo();
   };
+  const command = (action: PlayerCommand) => {
+    const p = player.current;
+    if (!p || !live.ready) return;
+    try {
+      sampleRef.current();
+      if (action.type === "stop") stopRequested.current = true;
+      if (action.type === "play") stopRequested.current = false;
+      runPlayerCommand(p, action);
+      if (action.type === "stop") tracker.current.previous = null;
+      setLive(readLiveState(p));
+      setCommandError("");
+    } catch (e) {
+      setCommandError(
+        e instanceof Error ? e.message : "Player command failed.",
+      );
+    }
+  };
   return {
     host,
     session,
@@ -319,5 +420,10 @@ export function useWatchPlayer(student: string, video: string, threshold = 90) {
     flush: () => flushRef.current(),
     sessionActive,
     endSession: () => endSessionRef.current(),
+    live,
+    command,
+    commandError,
+    appliedVars,
+    trackingSuspended,
   };
 }

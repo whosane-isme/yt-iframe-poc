@@ -93,6 +93,16 @@ export interface Player {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   playVideo(): void;
   pauseVideo(): void;
+  stopVideo(): void;
+  setPlaybackRate(rate: number): void;
+  mute(): void;
+  unMute(): void;
+  isMuted(): boolean;
+  getVolume(): number;
+  setVolume(volume: number): void;
+  getOptions(module?: string): string[];
+  getOption(module: string, option: string): unknown;
+  setOption(module: string, option: string, value: number | boolean): void;
   destroy(): void;
 }
 export interface PlayerEvent {

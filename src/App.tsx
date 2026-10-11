@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -9,6 +9,7 @@ import {
   ChevronRight,
   GraduationCap,
   Radio,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useWatchPlayer } from "./hooks/useWatchPlayer";
 import { AnalyticsDashboard } from "./components/AnalyticsDashboard";
@@ -21,6 +22,17 @@ import { clearAll } from "./lib/storage";
 import { TRACKING_VERSION } from "./lib/watchTracker";
 import { checkpoint, progressSummary } from "./lib/watchSummary";
 import { SessionSummaries } from "./components/SessionSummaries";
+import { PlayerCustomizationLab } from "./components/PlayerCustomizationLab";
+import { LivePlayerControls } from "./components/LivePlayerControls";
+import {
+  DEFAULT_SETTINGS,
+  type PlayerInitialization,
+  type PlayerSettings,
+} from "./lib/playerConfig";
+import {
+  restorePlayerSettings,
+  savePlayerSettings,
+} from "./lib/playerSettingsStorage";
 const students = [
   { id: "student-a", name: "Student A" },
   { id: "student-b", name: "Student B" },
@@ -37,7 +49,34 @@ function Workspace({
   threshold: number;
   setThreshold: (n: number) => void;
 }) {
-  const tracking = useWatchPlayer(student, video, threshold);
+  const [configuration, setConfiguration] = useState<PlayerInitialization>(
+    () => {
+      let settings = { ...DEFAULT_SETTINGS };
+      try {
+        settings = restorePlayerSettings(window.localStorage);
+      } catch {
+        /* Browser storage may be unavailable. */
+      }
+      return { settings, revision: 0, autoplayAuthorized: false };
+    },
+  );
+  const [labOpen, setLabOpen] = useState(false);
+  const customizeButton = useRef<HTMLButtonElement>(null);
+  const [previewWidth, setPreviewWidth] = useState<number | null>(null);
+  const tracking = useWatchPlayer(student, video, threshold, configuration);
+  const applySettings = (settings: PlayerSettings) => {
+    tracking.flush();
+    setConfiguration((old) => ({
+      settings: { ...settings },
+      revision: old.revision + 1,
+      autoplayAuthorized: settings.autoplay,
+    }));
+    try {
+      return savePlayerSettings(window.localStorage, settings);
+    } catch {
+      return false;
+    }
+  };
   const { session } = tracking;
   const download = () => {
     tracking.flush();
@@ -69,94 +108,167 @@ function Workspace({
   };
   return (
     <>
-      <div className="workspace-grid">
-        <div className="lecture-column">
-          <section className="panel player-panel">
-            <div className="section-heading">
-              <h2>
-                <Play size={17} /> Lecture player
-              </h2>
-              <span
-                className={`player-status ${tracking.status.toLowerCase().replaceAll(" ", "-")}`}
-              >
-                <i />
-                {tracking.status}
-              </span>
-            </div>
-            <div ref={tracking.host} className="player-host" />
-            {tracking.error && (
-              <div className="error" role="alert">
-                {tracking.error}
-                <button onClick={tracking.retry}>Retry player</button>
-              </div>
-            )}
-            <div className="lecture-caption">
-              <div>
-                <span className="eyebrow">YOUTUBE LECTURE</span>
-                <h3>
-                  {video === "M7lc1UVf-VE"
-                    ? "YouTube IFrame API · sample video"
-                    : `Lecture ${video}`}
-                </h3>
-                <span className="muted">Video ID: {video}</span>
-              </div>
-              <a
-                href={`https://www.youtube.com/watch?v=${video}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open on YouTube <ArrowUpRight size={15} />
-              </a>
-            </div>
-            <div className="player-stats">
-              <div>
-                <label>Current position</label>
-                <strong>
-                  {formatTime(session.lastPositionSeconds)}{" "}
-                  <span>
-                    /{" "}
-                    {session.duration > 0 ? formatTime(session.duration) : "—"}
-                  </span>
-                </strong>
-              </div>
-              <div>
-                <label>Playback speed</label>
-                <strong>
-                  {tracking.rate === null
-                    ? "Not available"
-                    : `${tracking.rate}×`}
-                </strong>
-              </div>
-              <div>
-                <label>Tracking identity</label>
-                <strong>{students.find((s) => s.id === student)?.name}</strong>
-              </div>
-            </div>
-            {tracking.resumePosition > 0 && (
-              <button className="resume" onClick={tracking.resume}>
-                <RotateCcw size={14} /> Resume saved position ·{" "}
-                {formatTime(tracking.resumePosition)}
-              </button>
-            )}
-            <small className="muted available-rates">
-              Available player rates:{" "}
-              {tracking.rates.length
-                ? tracking.rates.map((r) => `${r}×`).join(" · ")
-                : "Not available"}
-            </small>
-          </section>
-          <WatchTimeline session={session} />
-        </div>
-        <AnalyticsDashboard
-          session={session}
-          threshold={threshold}
-          setThreshold={setThreshold}
-          studentName={students.find((s) => s.id === student)?.name ?? student}
+      {labOpen && (
+        <PlayerCustomizationLab
+          settings={configuration.settings}
+          video={video}
+          appliedVars={tracking.appliedVars}
+          onApply={applySettings}
+          onClose={() => {
+            setLabOpen(false);
+            setPreviewWidth(null);
+            customizeButton.current?.focus();
+          }}
+          previewWidth={previewWidth}
+          onPreviewWidth={setPreviewWidth}
+          live={tracking.live}
+          rates={tracking.rates}
+          rate={tracking.rate}
+          command={tracking.command}
+          commandError={tracking.commandError}
         />
+      )}
+      <div
+        className="responsive-preview"
+        style={{ width: previewWidth ?? "100%", maxWidth: "100%" }}
+      >
+        <div className="workspace-grid">
+          <div className="lecture-column">
+            <section className="panel player-panel">
+              <div className="section-heading">
+                <h2>
+                  <Play size={17} /> Lecture player
+                </h2>
+                <div className="player-heading-actions">
+                  <button
+                    ref={customizeButton}
+                    type="button"
+                    aria-expanded={labOpen}
+                    aria-controls="player-customization-lab"
+                    onClick={() => {
+                      setLabOpen(!labOpen);
+                      if (labOpen) setPreviewWidth(null);
+                    }}
+                  >
+                    <SlidersHorizontal size={14} />
+                    Customize Player
+                  </button>
+                  <span
+                    className={`player-status ${tracking.status.toLowerCase().replaceAll(" ", "-")}`}
+                  >
+                    <i />
+                    {tracking.status}
+                  </span>
+                </div>
+              </div>
+              <div ref={tracking.host} className="player-host" />
+              {tracking.trackingSuspended && (
+                <p className="lab-warning">
+                  Segment experiment · lecture analytics and session
+                  finalization are suspended. Apply full-lecture settings to
+                  resume tracking.
+                </p>
+              )}
+              {tracking.error && (
+                <div className="error" role="alert">
+                  {tracking.error}
+                  <button onClick={tracking.retry}>Retry player</button>
+                </div>
+              )}
+              <div className="lecture-caption">
+                <div>
+                  <span className="eyebrow">YOUTUBE LECTURE</span>
+                  <h3>
+                    {video === "M7lc1UVf-VE"
+                      ? "YouTube IFrame API · sample video"
+                      : `Lecture ${video}`}
+                  </h3>
+                  <span className="muted">Video ID: {video}</span>
+                </div>
+                <a
+                  href={`https://www.youtube.com/watch?v=${video}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open on YouTube <ArrowUpRight size={15} />
+                </a>
+              </div>
+              <div className="player-stats">
+                <div>
+                  <label>Current position</label>
+                  <strong>
+                    {formatTime(
+                      tracking.live.ready
+                        ? tracking.live.position
+                        : session.lastPositionSeconds,
+                    )}{" "}
+                    <span>
+                      /{" "}
+                      {(tracking.live.ready
+                        ? tracking.live.duration
+                        : session.duration) > 0
+                        ? formatTime(
+                            tracking.live.ready
+                              ? tracking.live.duration
+                              : session.duration,
+                          )
+                        : "—"}
+                    </span>
+                  </strong>
+                </div>
+                <div>
+                  <label>Playback speed</label>
+                  <strong>
+                    {tracking.rate === null
+                      ? "Not available"
+                      : `${tracking.rate}×`}
+                  </strong>
+                </div>
+                <div>
+                  <label>Tracking identity</label>
+                  <strong>
+                    {students.find((s) => s.id === student)?.name}
+                  </strong>
+                </div>
+              </div>
+              {tracking.resumePosition > 0 && !tracking.trackingSuspended && (
+                <button className="resume" onClick={tracking.resume}>
+                  <RotateCcw size={14} /> Resume saved position ·{" "}
+                  {formatTime(tracking.resumePosition)}
+                </button>
+              )}
+              <small className="muted available-rates">
+                Available player rates:{" "}
+                {tracking.rates.length
+                  ? tracking.rates.map((r) => `${r}×`).join(" · ")
+                  : "Not available"}
+              </small>
+              {!labOpen && !configuration.settings.controls && (
+                <LivePlayerControls
+                  live={tracking.live}
+                  rates={tracking.rates}
+                  rate={tracking.rate}
+                  command={tracking.command}
+                  error={tracking.commandError}
+                />
+              )}
+            </section>
+            <WatchTimeline session={session} />
+          </div>
+          <AnalyticsDashboard
+            session={session}
+            threshold={threshold}
+            setThreshold={setThreshold}
+            studentName={
+              students.find((s) => s.id === student)?.name ?? student
+            }
+          />
+        </div>
       </div>
       <SessionSummaries
         history={session.recentSessionSummaries ?? []}
         active={tracking.sessionActive}
+        suspended={tracking.trackingSuspended}
         onEnd={tracking.endSession}
       />
       {tracking.storageError && (
@@ -190,9 +302,35 @@ function Workspace({
   );
 }
 export default function App() {
-  const [student, setStudent] = useState("student-a");
-  const [video, setVideo] = useState("M7lc1UVf-VE");
-  const [input, setInput] = useState("M7lc1UVf-VE");
+  const [initialContext] = useState(() => {
+    try {
+      const value = JSON.parse(
+        window.localStorage.getItem("yt-analytics:context:v1") ?? "null",
+      );
+      const parsedVideo = parseVideoId(value?.video ?? "");
+      if (students.some((s) => s.id === value?.student) && parsedVideo)
+        return {
+          student: value.student as string,
+          video: parsedVideo,
+        };
+    } catch {
+      /* Restore the sample context if unavailable. */
+    }
+    return { student: "student-a", video: "M7lc1UVf-VE" };
+  });
+  const [student, setStudent] = useState(initialContext.student);
+  const [video, setVideo] = useState(initialContext.video);
+  const [input, setInput] = useState(initialContext.video);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "yt-analytics:context:v1",
+        JSON.stringify({ student, video }),
+      );
+    } catch {
+      /* Analytics storage reports persistence failures separately. */
+    }
+  }, [student, video]);
   const [error, setError] = useState("");
   const [generation, setGeneration] = useState(0);
   const [threshold, setThreshold] = useState(90);
