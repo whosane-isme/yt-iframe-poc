@@ -1,20 +1,24 @@
 import { Clock3, ScanLine, SkipForward, CheckCircle2 } from "lucide-react";
 import type { WatchSession } from "../types";
 import { formatTime, metrics } from "../lib/analytics";
+import { progressSummary, readableSummary } from "../lib/watchSummary";
 export function AnalyticsDashboard({
   session,
   threshold,
   setThreshold,
+  studentName,
 }: {
   session: WatchSession;
   threshold: number;
   setThreshold: (n: number) => void;
+  studentName: string;
 }) {
   const m = metrics(session, threshold);
+  const summary = progressSummary(session, threshold);
   return (
     <section className="panel analytics">
       <div className="section-heading">
-        <h2>Watch analytics</h2>
+        <h2>Watch Summary</h2>
         <span className="live-dot">LIVE</span>
       </div>
       <p className="muted">Observed activity for this student & video</p>
@@ -76,7 +80,13 @@ export function AnalyticsDashboard({
       </div>
       <div className="completion">
         <div>
-          <strong>{m.completed ? "Completed" : "In progress"}</strong>
+          <strong>
+            {m.completed
+              ? "Completed"
+              : m.covered > 0
+                ? "Partial progress"
+                : "No coverage yet"}
+          </strong>
           <span className="muted">Coverage rule</span>
         </div>
         <progress value={m.percentage} max={100} />
@@ -116,6 +126,35 @@ export function AnalyticsDashboard({
         )}
         <small className="muted">
           {session.playbackRateHistory.length} retained rate changes
+        </small>
+      </div>
+      <div className="automatic-report">
+        <div className="section-heading">
+          <h3>Automatic progress report</h3>
+          <span className="badge">DETERMINISTIC</span>
+        </div>
+        <p>{readableSummary(summary, studentName)}</p>
+        <dl>
+          <div>
+            <dt>Weighted average speed</dt>
+            <dd>
+              {summary.weightedAverageSpeed === null
+                ? "Not available"
+                : `${summary.weightedAverageSpeed.toFixed(2)}×`}
+            </dd>
+          </div>
+          <div>
+            <dt>Coverage threshold met</dt>
+            <dd>{summary.coverageThresholdSatisfied ? "Yes" : "No"}</dd>
+          </div>
+          <div>
+            <dt>Last observed update</dt>
+            <dd>{new Date(summary.lastUpdatedAt).toLocaleTimeString()}</dd>
+          </div>
+        </dl>
+        <small className="muted">
+          Last position is shown beside the player. Cumulative across viewing
+          sessions.
         </small>
       </div>
     </section>

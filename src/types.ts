@@ -31,6 +31,53 @@ export interface WatchSession {
   rateWallSeconds: Record<string, number>;
   events: PlaybackEvent[];
   reachedEnd: boolean;
+  progressSummary?: ProgressSummary;
+  recentSessionSummaries?: FinalSessionSummary[];
+}
+export interface ProgressSummary {
+  studentId: string;
+  videoId: string;
+  durationSeconds: number | null;
+  uniqueWatchedSeconds: number;
+  coveragePercentage: number | null;
+  totalPlaybackWallSeconds: number;
+  lastPositionSeconds: number;
+  seekCount: number;
+  rateWallSeconds: Record<string, number>;
+  weightedAverageSpeed: number | null;
+  reachedEnd: boolean;
+  coverageThresholdSatisfied: boolean;
+  completionThreshold: number;
+  completed: boolean;
+  lastUpdatedAt: string;
+}
+// Only held in memory. A refresh starts a new logical session on next playback.
+export interface SessionBaseline {
+  sessionId: string;
+  startedAt: string;
+  playbackWallSeconds: number;
+  coveredSeconds: number;
+  seekCount: number;
+  rateWallSeconds: Record<string, number>;
+}
+export interface FinalSessionSummary {
+  sessionId: string;
+  studentId: string;
+  videoId: string;
+  startedAt: string;
+  endedAt: string;
+  playbackWallSeconds: number;
+  newlyCoveredSeconds: number;
+  cumulativeCoveredSeconds: number;
+  cumulativeCoveragePercentage: number | null;
+  seekCount: number;
+  rateWallSeconds: Record<string, number>;
+  weightedAverageSpeed: number | null;
+  reachedEnd: boolean;
+  coverageThresholdSatisfied: boolean;
+  completionThreshold: number;
+  completed: boolean;
+  endingReason: "video_ended" | "manual_end";
 }
 export interface Tracker {
   session: WatchSession;

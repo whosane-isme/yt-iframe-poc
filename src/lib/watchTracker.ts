@@ -5,7 +5,7 @@ import type {
   WatchSession,
 } from "../types";
 import { mergeIntervals } from "./analytics";
-export const TRACKING_VERSION = "1.0.0";
+export const TRACKING_VERSION = "1.1.0";
 export const stateLabels: Record<number, string> = {
   [-1]: "Unstarted",
   0: "Ended",

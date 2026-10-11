@@ -1,4 +1,79 @@
 @import "tailwindcss";
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.automatic-report {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  margin-top: 18px;
+}
+.automatic-report h3 {
+  font-size: 11px;
+}
+.automatic-report p {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #b8c6c0;
+  margin: 12px 0;
+}
+.automatic-report dl {
+  font-size: 10px;
+  margin: 0 0 12px;
+}
+.automatic-report dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+}
+.automatic-report dt,
+.session-metrics dt {
+  color: var(--muted);
+}
+.automatic-report dd {
+  margin: 0;
+  text-align: right;
+}
+.session-summaries {
+  padding: 20px;
+  margin-top: 22px;
+}
+.final-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+}
+.session-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin: 20px 0;
+}
+.session-metrics dt {
+  font-size: 10px;
+}
+.session-metrics dd {
+  font-size: 17px;
+  margin: 6px 0 0;
+}
+.session-summaries details {
+  margin-top: 20px;
+}
+@media (max-width: 760px) {
+  .session-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+  .final-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+  .session-metrics dd {
+    font-size: 14px;
+  }
+}
 :root {
   font-family:
     Inter,

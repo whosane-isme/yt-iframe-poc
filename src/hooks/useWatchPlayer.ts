@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Player, Tracker, WatchSession } from "../types";
+import type { Player, SessionBaseline, Tracker, WatchSession } from "../types";
 import { loadYouTubeAPI } from "../lib/youtubeApi";
 import {
   createSession,
@@ -8,6 +8,12 @@ import {
   stateLabels,
 } from "../lib/watchTracker";
 import { persist, restore } from "../lib/storage";
+import {
+  beginSession,
+  checkpoint,
+  CHECKPOINT_INTERVAL_MS,
+  finalizeSession,
+} from "../lib/watchSummary";
 const errors: Record<number, string> = {
   2: "Invalid video ID or player parameter.",
   5: "HTML5 playback failed. Try another browser.",
@@ -23,7 +29,7 @@ function saved(student: string, video: string) {
     return createSession(student, video);
   }
 }
-export function useWatchPlayer(student: string, video: string) {
+export function useWatchPlayer(student: string, video: string, threshold = 90) {
   const host = useRef<HTMLDivElement>(null);
   const player = useRef<Player | null>(null);
   const [session, setSession] = useState<WatchSession>(() =>
@@ -38,6 +44,11 @@ export function useWatchPlayer(student: string, video: string) {
   const [rates, setRates] = useState<number[]>([]);
   const resumePosition = useRef(tracker.current.session.lastPositionSeconds);
   const flushRef = useRef<() => void>(() => {});
+  const logicalSession = useRef<SessionBaseline | null>(null);
+  const [sessionActive, setSessionActive] = useState(false);
+  const thresholdRef = useRef(threshold);
+  thresholdRef.current = threshold;
+  const endSessionRef = useRef<() => void>(() => {});
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -54,6 +65,10 @@ export function useWatchPlayer(student: string, video: string) {
     };
     const flush = () => {
       if (!dirty) return;
+      tracker.current.session = checkpoint(
+        tracker.current.session,
+        thresholdRef.current,
+      );
       try {
         const ok = persist(window.localStorage, tracker.current.session);
         if (active) setStorageError(!ok);
@@ -66,6 +81,8 @@ export function useWatchPlayer(student: string, video: string) {
     flushRef.current = flush;
     const sample = () => {
       if (!local || !ready) return;
+      const beforeSeek = tracker.current.session.seekCount;
+      if (!logicalSession.current) tracker.current.previous = null;
       tracker.current = observe(tracker.current, {
         position: local.getCurrentTime(),
         duration: local.getDuration(),
@@ -74,8 +91,31 @@ export function useWatchPlayer(student: string, video: string) {
         mono: performance.now(),
         visible: document.visibilityState === "visible",
       });
+      if (!logicalSession.current) tracker.current.previous = null;
       setRate(local.getPlaybackRate());
       publish();
+      if (tracker.current.session.seekCount > beforeSeek) flush();
+    };
+    const finish = (reason: "manual_end" | "video_ended") => {
+      if (!logicalSession.current) return;
+      tracker.current.session = finalizeSession(
+        tracker.current.session,
+        logicalSession.current,
+        reason,
+        new Date().toISOString(),
+        thresholdRef.current,
+      );
+      logicalSession.current = null;
+      tracker.current.previous = null;
+      setSessionActive(false);
+      publish();
+      flush();
+    };
+    endSessionRef.current = () => {
+      if (!logicalSession.current) return;
+      sample();
+      finish("manual_end");
+      local?.pauseVideo();
     };
     const event = (type: string, details = "") => {
       if (!local) return;
@@ -91,7 +131,7 @@ export function useWatchPlayer(student: string, video: string) {
     const poll = () => {
       if (!active || !ready || !local) return;
       sample();
-      if (performance.now() - lastSave >= 2000) flush();
+      if (performance.now() - lastSave >= CHECKPOINT_INTERVAL_MS) flush();
       timer = setTimeout(poll, local.getPlayerState() === 1 ? 500 : 1500);
     };
     const visibility = () => {
@@ -143,6 +183,15 @@ export function useWatchPlayer(student: string, video: string) {
             },
             onStateChange: (e) => {
               if (!active || !ready) return;
+              if (e.data === 1 && !logicalSession.current) {
+                logicalSession.current = beginSession(
+                  tracker.current.session,
+                  crypto.randomUUID(),
+                  new Date().toISOString(),
+                );
+                tracker.current.previous = null;
+                setSessionActive(true);
+              }
               sample();
               setStatus(stateLabels[e.data] ?? "Unknown");
               if (e.data === 0)
@@ -154,6 +203,7 @@ export function useWatchPlayer(student: string, video: string) {
                 stateLabels[e.data]?.toLowerCase() ?? "state",
                 `YouTube state ${e.data}`,
               );
+              if (e.data === 0) finish("video_ended");
               if (e.data !== 1) flush();
             },
             onPlaybackRateChange: (e) => {
@@ -210,6 +260,15 @@ export function useWatchPlayer(student: string, video: string) {
       tracker.current.previous = null;
     };
   }, [student, video, retry]);
+  useEffect(() => {
+    tracker.current.session = checkpoint(tracker.current.session, threshold);
+    setSession(tracker.current.session);
+    try {
+      setStorageError(!persist(window.localStorage, tracker.current.session));
+    } catch {
+      setStorageError(true);
+    }
+  }, [threshold]);
   const reset = () => {
     player.current?.pauseVideo();
     tracker.current = {
@@ -217,9 +276,15 @@ export function useWatchPlayer(student: string, video: string) {
       previous: null,
     };
     resumePosition.current = 0;
+    logicalSession.current = null;
+    setSessionActive(false);
+    tracker.current.session = checkpoint(
+      tracker.current.session,
+      thresholdRef.current,
+    );
     setSession(tracker.current.session);
     try {
-      persist(window.localStorage, tracker.current.session);
+      setStorageError(!persist(window.localStorage, tracker.current.session));
     } catch {
       setStorageError(true);
     }
@@ -252,5 +317,7 @@ export function useWatchPlayer(student: string, video: string) {
     resumePosition: resumePosition.current,
     retry: () => setRetry((n) => n + 1),
     flush: () => flushRef.current(),
+    sessionActive,
+    endSession: () => endSessionRef.current(),
   };
 }

@@ -19,6 +19,8 @@ import { parseVideoId } from "./lib/youtubeUrl";
 import { formatTime, metrics } from "./lib/analytics";
 import { clearAll } from "./lib/storage";
 import { TRACKING_VERSION } from "./lib/watchTracker";
+import { checkpoint, progressSummary } from "./lib/watchSummary";
+import { SessionSummaries } from "./components/SessionSummaries";
 const students = [
   { id: "student-a", name: "Student A" },
   { id: "student-b", name: "Student B" },
@@ -35,7 +37,7 @@ function Workspace({
   threshold: number;
   setThreshold: (n: number) => void;
 }) {
-  const tracking = useWatchPlayer(student, video);
+  const tracking = useWatchPlayer(student, video, threshold);
   const { session } = tracking;
   const download = () => {
     tracking.flush();
@@ -43,7 +45,11 @@ function Workspace({
       implementationVersion: TRACKING_VERSION,
       exportedAt: new Date().toISOString(),
       student: students.find((s) => s.id === student),
-      ...session,
+      ...checkpoint(session, threshold),
+      cumulativeProgressSummary: progressSummary(session, threshold),
+      latestFinalizedSessionSummary:
+        session.recentSessionSummaries?.[0] ?? null,
+      recentSessionHistory: session.recentSessionSummaries ?? [],
       coverage: metrics(session, threshold),
       completionCalculation: {
         ...metrics(session, threshold),
@@ -145,8 +151,14 @@ function Workspace({
           session={session}
           threshold={threshold}
           setThreshold={setThreshold}
+          studentName={students.find((s) => s.id === student)?.name ?? student}
         />
       </div>
+      <SessionSummaries
+        history={session.recentSessionSummaries ?? []}
+        active={tracking.sessionActive}
+        onEnd={tracking.endSession}
+      />
       {tracking.storageError && (
         <div className="error" role="alert">
           Local storage is unavailable or full. Progress may not survive a
